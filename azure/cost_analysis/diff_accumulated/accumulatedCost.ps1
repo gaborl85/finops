@@ -1,44 +1,94 @@
-# Azure Cost Diff - ANSI Stripped Version (Parameterized)
-# This script compares accumulated costs between any two months
+<#
+.SYNOPSIS
+Compares accumulated Azure costs between two months and writes a cleaned diff report per subscription.
 
+.DESCRIPTION
+Exports accumulated cost for the source and target months per subscription, runs a diff, strips ANSI
+escape codes and box characters, and writes a clean text report.
+
+.PARAMETER SourceMonth
+Source month in yyyy-MM format.
+
+.PARAMETER TargetMonth
+Target month in yyyy-MM format.
+
+.OUTPUTS
+None. Writes report files to the current directory.
+
+.NOTES
+Requires Azure CLI and the azure-cost CLI to be installed and authenticated.
+#>
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Low')]
 param(
-    [Parameter(Mandatory=$true)]
-    [string]$SourceMonth, # e.g., "2025-09"
+    [Parameter(Mandatory = $true)]
+    [ValidateNotNullOrEmpty()]
+    [ValidatePattern('^\d{4}-\d{2}$')]
+    [string]$SourceMonth,
 
-    [Parameter(Mandatory=$true)]
-    [string]$TargetMonth  # e.g., "2025-10"
+    [Parameter(Mandatory = $true)]
+    [ValidateNotNullOrEmpty()]
+    [ValidatePattern('^\d{4}-\d{2}$')]
+    [string]$TargetMonth
 )
 
-# ---- Calculate date ranges
-# Parse source month
-try {
-    $SourceDate = [datetime]::ParseExact($SourceMonth, "yyyy-MM", $null)
-    $fromSource = $SourceDate.ToString("yyyy-MM-01")
-    $toSource = $SourceDate.AddMonths(1).AddDays(-1).ToString("yyyy-MM-dd")
-}
-catch {
-    Write-Error "Invalid SourceMonth format. Please use 'yyyy-MM'."
-    exit 1
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$InformationPreference = 'Continue'
+
+function Get-MonthRange {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [ValidatePattern('^\d{4}-\d{2}$')]
+        [string]$Month,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Label
+    )
+
+    try {
+        $date = [datetime]::ParseExact($Month, 'yyyy-MM', [System.Globalization.CultureInfo]::InvariantCulture)
+        return [PSCustomObject]@{
+            Date    = $date
+            From    = $date.ToString('yyyy-MM-01', [System.Globalization.CultureInfo]::InvariantCulture)
+            To      = $date.AddMonths(1).AddDays(-1).ToString('yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture)
+            Display = $date.ToString('MMMM yyyy', [System.Globalization.CultureInfo]::InvariantCulture)
+        }
+    } catch {
+        $errorRecord = [System.Management.Automation.ErrorRecord]::new(
+            [System.FormatException]::new("Invalid $Label format. Please use 'yyyy-MM'."),
+            'InvalidMonthFormat',
+            [System.Management.Automation.ErrorCategory]::InvalidData,
+            $Month
+        )
+        $PSCmdlet.ThrowTerminatingError($errorRecord)
+    }
 }
 
-# Parse target month
-try {
-    $TargetDate = [datetime]::ParseExact($TargetMonth, "yyyy-MM", $null)
-    $fromTarget = $TargetDate.ToString("yyyy-MM-01")
-    $toTarget = $TargetDate.AddMonths(1).AddDays(-1).ToString("yyyy-MM-dd")
-}
-catch {
-    Write-Error "Invalid TargetMonth format. Please use 'yyyy-MM'."
-    exit 1
-}
+$sourceInfo = Get-MonthRange -Month $SourceMonth -Label 'SourceMonth'
+$targetInfo = Get-MonthRange -Month $TargetMonth -Label 'TargetMonth'
 
-# ---- Create Dynamic Labels
-# Generate month names for display
-$SourceMonthName = $SourceDate.ToString("MMMM yyyy")
-$TargetMonthName = $TargetDate.ToString("MMMM yyyy")
+$SourceDate = $sourceInfo.Date
+$TargetDate = $targetInfo.Date
+$fromSource = $sourceInfo.From
+$toSource = $sourceInfo.To
+$fromTarget = $targetInfo.From
+$toTarget = $targetInfo.To
+$SourceMonthName = $sourceInfo.Display
+$TargetMonthName = $targetInfo.Display
 
-# Get all subscription IDs
 $subs = az account list --query "[].[id,name]" -o tsv
+if ($LASTEXITCODE -ne 0 -or -not $subs) {
+    $errorRecord = [System.Management.Automation.ErrorRecord]::new(
+        [System.Exception]::new('Failed to list Azure subscriptions. Ensure Azure CLI is authenticated.'),
+        'SubscriptionListFailed',
+        [System.Management.Automation.ErrorCategory]::OpenError,
+        $null
+    )
+    $PSCmdlet.ThrowTerminatingError($errorRecord)
+}
 
 foreach ($line in $subs) {
     $parts = $line.Trim() -split "`t"
@@ -49,36 +99,36 @@ foreach ($line in $subs) {
 
     if (-not $id -or -not $name) { continue }
 
-    Write-Host "`n=== Processing Subscription: $name ($id) ===`n"
+    $safeName = $name -replace '[\\/:*?"<>|]', '_'
+    $sourceFile = "$SourceMonth-$safeName.json"
+    $targetFile = "$TargetMonth-$safeName.json"
+    $out = "diff_accumulatedCost-$safeName-$SourceMonth-vs-$TargetMonth.txt"
 
+    Write-Verbose "Processing subscription: $name ($id)"
 
-    $sourceFile = "$SourceMonth-$name.json"
-    $targetFile = "$TargetMonth-$name.json"
-    $out = "diff_accumulatedCost-$name-$SourceMonth-vs-$TargetMonth.txt"
+    if ($PSCmdlet.ShouldProcess($sourceFile, "Export accumulated cost for $SourceMonthName ($name)")) {
+        azure-cost accumulatedCost -s $id --timeframe Custom --from $fromSource --to $toSource -o json |
+            Out-File -FilePath $sourceFile -Encoding utf8
+        if ($LASTEXITCODE -ne 0) { Write-Warning "Skipping $name ($id) - ($SourceMonthName export failed)"; continue }
+        if (-not (Test-Path -LiteralPath $sourceFile) -or (Get-Item -LiteralPath $sourceFile).Length -eq 0) { Write-Warning "Skipping $name ($id) - ($SourceMonthName empty)"; continue }
+    }
 
-    # Source
-    azure-cost accumulatedCost -s $id --timeframe Custom --from $fromSource --to $toSource -o json |
-        Out-File $sourceFile -Encoding utf8
-    if ($LASTEXITCODE -ne 0) { Write-Warning "Skipping $name ($id) - ($SourceMonthName export failed)"; continue }
-    if (-not (Test-Path $sourceFile) -or (Get-Item $sourceFile).Length -eq 0) { Write-Warning "Skipping $name ($id) - ($SourceMonthName empty)"; continue }
+    if ($PSCmdlet.ShouldProcess($targetFile, "Export accumulated cost for $TargetMonthName ($name)")) {
+        azure-cost accumulatedCost -s $id --timeframe Custom --from $fromTarget --to $toTarget -o json |
+            Out-File -FilePath $targetFile -Encoding utf8
+        if ($LASTEXITCODE -ne 0) { Write-Warning "Skipping $name ($id) - ($TargetMonthName export failed)"; continue }
+        if (-not (Test-Path -LiteralPath $targetFile) -or (Get-Item -LiteralPath $targetFile).Length -eq 0) { Write-Warning "Skipping $name ($id) - ($TargetMonthName empty)"; continue }
+    }
 
-    # Target
-    azure-cost accumulatedCost -s $id --timeframe Custom --from $fromTarget --to $toTarget -o json |
-        Out-File $targetFile -Encoding utf8
-    if ($LASTEXITCODE -ne 0) { Write-Warning "Skipping $name ($id) - ($TargetMonthName export failed)"; continue }
-    if (-not (Test-Path $targetFile) -or (Get-Item $targetFile).Length -eq 0) { Write-Warning "Skipping $name ($id) - ($TargetMonthName empty)"; continue }
-
-    # Diff with ANSI codes
     $diffWithAnsi = azure-cost diff --compare-from $sourceFile --compare-to $targetFile
+    if ($LASTEXITCODE -ne 0) { Write-Warning "Skipping $name ($id) - diff failed"; continue }
 
-    # Strip ANSI escape codes using regex
     $ansiRegex = '\x1b\[[0-9;]*m'
     $cleanOutput = $diffWithAnsi -replace $ansiRegex, ''
-
-    # Also replace box drawing characters for even cleaner output
     $cleanOutput = $cleanOutput -replace '┌|┬|┐|├|┼|┤|└|┴|┘|│|─|╭|╮|╰|╯', '|'
 
-    # Write the clean output
-    $cleanOutput | Out-File $out -Encoding utf8
-    Write-Host "ANSI-stripped report saved to: $out"
+    if ($PSCmdlet.ShouldProcess($out, "Write report for $name")) {
+        $cleanOutput | Out-File -FilePath $out -Encoding utf8
+        Write-Information "Report saved to: $out"
+    }
 }
