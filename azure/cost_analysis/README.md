@@ -20,6 +20,7 @@ PowerShell scripts for comprehensive Azure cost analysis, providing parameterize
 - [Azure Cost CLI](https://github.com/mivano/azure-cost-cli) installed and configured
 - Azure CLI (`az`) installed and authenticated
 - Access to Azure subscriptions with Cost Management permissions
+- Scripts fail fast if required CLIs are missing
 
 ## 🚀 Installation
 
@@ -53,8 +54,9 @@ Compare accumulated costs between any two months across all subscriptions:
 cd diff_accumulated
 
 # Compare costs between two months
-.\accumulatedCost.ps1 -SourceMonth "2025-11" -TargetMonth "2025-12"
+.\accumulatedCost.ps1 -SourceMonth "2025-11" -TargetMonth "2025-12" -WhatIf
 ```
+*Use `-WhatIf`/`-Confirm` for safe previews.*
 
 **Parameters:**
 - `-SourceMonth`: Source month in `YYYY-MM` format (e.g., "2025-11") - **Required**
@@ -78,7 +80,9 @@ Analyze costs at the resource level with anomaly detection:
 cd diff_resource
 
 # Compare resource costs between two months
-.\diff_costByResource.ps1 -SourceMonth "2025-11" -TargetMonth "2025-12"
+.\diff_costByResource.ps1 -SourceMonth "2025-11" -TargetMonth "2025-12" -WhatIf
+```
+*Use `-WhatIf`/`-Confirm` for safe previews.*
 
 # With custom thresholds
 .\diff_costByResource.ps1 -SourceMonth "2025-11" -TargetMonth "2025-12" `

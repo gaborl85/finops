@@ -79,17 +79,6 @@ $toTarget = $targetInfo.To
 $SourceMonthName = $sourceInfo.Display
 $TargetMonthName = $targetInfo.Display
 
-$subs = az account list --query "[].[id,name]" -o tsv
-if ($LASTEXITCODE -ne 0 -or -not $subs) {
-    $errorRecord = [System.Management.Automation.ErrorRecord]::new(
-        [System.Exception]::new('Failed to list Azure subscriptions. Ensure Azure CLI is authenticated.'),
-        'SubscriptionListFailed',
-        [System.Management.Automation.ErrorCategory]::OpenError,
-        $null
-    )
-    $PSCmdlet.ThrowTerminatingError($errorRecord)
-}
-
 $azCmd = Get-Command -Name az -ErrorAction SilentlyContinue
 $costCmd = Get-Command -Name azure-cost -ErrorAction SilentlyContinue
 if (-not $azCmd -or -not $costCmd) {
@@ -97,6 +86,17 @@ if (-not $azCmd -or -not $costCmd) {
         [System.Exception]::new('Required CLI(s) missing: az and/or azure-cost.'),
         'MissingCliDependency',
         [System.Management.Automation.ErrorCategory]::ResourceUnavailable,
+        $null
+    )
+    $PSCmdlet.ThrowTerminatingError($errorRecord)
+}
+
+$subs = az account list --query "[].[id,name]" -o tsv
+if ($LASTEXITCODE -ne 0 -or -not $subs) {
+    $errorRecord = [System.Management.Automation.ErrorRecord]::new(
+        [System.Exception]::new('Failed to list Azure subscriptions. Ensure Azure CLI is authenticated.'),
+        'SubscriptionListFailed',
+        [System.Management.Automation.ErrorCategory]::OpenError,
         $null
     )
     $PSCmdlet.ThrowTerminatingError($errorRecord)
