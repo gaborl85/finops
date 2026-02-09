@@ -90,6 +90,18 @@ if ($LASTEXITCODE -ne 0 -or -not $subs) {
     $PSCmdlet.ThrowTerminatingError($errorRecord)
 }
 
+$azCmd = Get-Command -Name az -ErrorAction SilentlyContinue
+$costCmd = Get-Command -Name azure-cost -ErrorAction SilentlyContinue
+if (-not $azCmd -or -not $costCmd) {
+    $errorRecord = [System.Management.Automation.ErrorRecord]::new(
+        [System.Exception]::new('Required CLI(s) missing: az and/or azure-cost.'),
+        'MissingCliDependency',
+        [System.Management.Automation.ErrorCategory]::ResourceUnavailable,
+        $null
+    )
+    $PSCmdlet.ThrowTerminatingError($errorRecord)
+}
+
 foreach ($line in $subs) {
     $parts = $line.Trim() -split "`t"
     if ($parts.Count -lt 2) { continue }

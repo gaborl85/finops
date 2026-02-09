@@ -1,95 +1,100 @@
-# ------------------------------------------------------------
-# Azure costByResource monthly diff per subscription with anomaly detection
-# Parameterized version - compares any two months
-# Handles empty ResourceId rows (refunds/purchases/reservations) via composite key
-# Produces: a .txt report per subscription with a 3-line header + formatted table
-# ------------------------------------------------------------
+<#
+.SYNOPSIS
+Compares resource-level Azure costs between two months and writes a report with anomaly detection.
 
+.DESCRIPTION
+Exports monthly resource costs per subscription, computes deltas, writes a top-50 increase report,
+and appends detected anomalies.
+
+.PARAMETER SourceMonth
+Source month in yyyy-MM format.
+
+.PARAMETER TargetMonth
+Target month in yyyy-MM format.
+
+.PARAMETER SignificantChangeThreshold
+Fractional threshold (e.g., 0.5 = 50%) for anomaly detection.
+
+.PARAMETER MinimumCostThreshold
+Minimum cost to consider for anomaly detection.
+
+.OUTPUTS
+None. Writes report files to the current directory.
+
+.NOTES
+Requires Azure CLI and the azure-cost CLI to be installed and authenticated.
+#>
+[CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'Low')]
 param(
-    [Parameter(Mandatory=$true)]
-    [string]$SourceMonth, # e.g., "2025-09"
+    [Parameter(Mandatory = $true)]
+    [ValidateNotNullOrEmpty()]
+    [ValidatePattern('^\d{4}-\d{2}$')]
+    [string]$SourceMonth,
 
-    [Parameter(Mandatory=$true)]
-    [string]$TargetMonth,  # e.g., "2025-10"
-    
-    [Parameter(Mandatory=$false)]
+    [Parameter(Mandatory = $true)]
+    [ValidateNotNullOrEmpty()]
+    [ValidatePattern('^\d{4}-\d{2}$')]
+    [string]$TargetMonth,
+
+    [Parameter()]
+    [ValidateRange(0, [double]::MaxValue)]
     [double]$SignificantChangeThreshold = 0.5,
-    
-    [Parameter(Mandatory=$false)]
+
+    [Parameter()]
+    [ValidateRange(0, [double]::MaxValue)]
     [double]$MinimumCostThreshold = 1.0
 )
 
-# ---- Calculate date ranges ----
-# Parse source month
-try {
-    $sourceDate = [datetime]::ParseExact($SourceMonth, "yyyy-MM", $null)
-    $fromSource = $sourceDate.ToString("yyyy-MM-01")
-    $toSource = $sourceDate.AddMonths(1).AddDays(-1).ToString("yyyy-MM-dd")
-    $sourceMonthName = $sourceDate.ToString("MMMM yyyy")
-} catch {
-    Write-Error "Invalid SourceMonth format. Use YYYY-MM (e.g., 2025-11)"
-    exit 1
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$InformationPreference = 'Continue'
+
+function Get-MonthRange {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [ValidatePattern('^\d{4}-\d{2}$')]
+        [string]$Month,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Label
+    )
+
+    try {
+        $date = [datetime]::ParseExact($Month, 'yyyy-MM', [System.Globalization.CultureInfo]::InvariantCulture)
+        return [PSCustomObject]@{
+            Date    = $date
+            From    = $date.ToString('yyyy-MM-01', [System.Globalization.CultureInfo]::InvariantCulture)
+            To      = $date.AddMonths(1).AddDays(-1).ToString('yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture)
+            Display = $date.ToString('MMMM yyyy', [System.Globalization.CultureInfo]::InvariantCulture)
+        }
+    } catch {
+        $errorRecord = [System.Management.Automation.ErrorRecord]::new(
+            [System.FormatException]::new("Invalid $Label format. Use yyyy-MM (e.g., 2025-11)."),
+            'InvalidMonthFormat',
+            [System.Management.Automation.ErrorCategory]::InvalidData,
+            $Month
+        )
+        $PSCmdlet.ThrowTerminatingError($errorRecord)
+    }
 }
 
-# Parse target month
-try {
-    $targetDate = [datetime]::ParseExact($TargetMonth, "yyyy-MM", $null)
-    $fromTarget = $targetDate.ToString("yyyy-MM-01")
-    $toTarget = $targetDate.AddMonths(1).AddDays(-1).ToString("yyyy-MM-dd")
-    $targetMonthName = $targetDate.ToString("MMMM yyyy")
-} catch {
-    Write-Error "Invalid TargetMonth format. Use YYYY-MM (e.g., 2025-12)"
-    exit 1
-}
+$sourceInfo = Get-MonthRange -Month $SourceMonth -Label 'SourceMonth'
+$targetInfo = Get-MonthRange -Month $TargetMonth -Label 'TargetMonth'
 
-# Create labels for output
+$sourceDate = $sourceInfo.Date
+$targetDate = $targetInfo.Date
+$fromSource = $sourceInfo.From
+$toSource = $sourceInfo.To
+$fromTarget = $targetInfo.From
+$toTarget = $targetInfo.To
+$sourceMonthName = $sourceInfo.Display
+$targetMonthName = $targetInfo.Display
+
 $sourceLabel = "Source: ($fromSource to $toSource)"
 $targetLabel = "Target: ($fromTarget to $toTarget)"
-
-# ---- Helper Functions ----
-function ItemKey($r) {
-  # Prefer ResourceId if available
-  if (-not [string]::IsNullOrWhiteSpace($r.ResourceId)) { return $r.ResourceId }
-
-  # Fallback key for non-resource lines (refunds/purchases/reservations/etc.)
-  "{0}|{1}|{2}|{3}|{4}|{5}" -f `
-    $r.ChargeType, $r.ServiceName, $r.ServiceTier, $r.Meter, $r.ResourceLocation, $r.ResourceGroupName
-}
-
-function ItemName($r) {
-  if (-not [string]::IsNullOrWhiteSpace($r.ResourceId)) { return $r.ResourceId }
-
-  $parts = @()
-  if ($r.ChargeType) { $parts += $r.ChargeType }
-  if ($r.ServiceName) { $parts += $r.ServiceName }
-  if ($r.Meter) { $parts += $r.Meter }
-  if ($r.ResourceLocation) { $parts += $r.ResourceLocation }
-  ($parts -join " • ")
-}
-
-function ResourceDisplayName($r) {
-  if ([string]::IsNullOrWhiteSpace($r.ResourceId)) {
-    return (ItemName $r)
-  }
-
-  $parts = $r.ResourceId.Trim('/') -split '/'
-
-  # Everything after "providers/<provider>"
-  $providerIndex = [Array]::IndexOf($parts, 'providers')
-  if ($providerIndex -ge 0 -and $providerIndex + 2 -lt $parts.Length) {
-    return ($parts[($providerIndex + 2)..($parts.Length - 1)] -join '/')
-  }
-
-  # Fallback: last segment
-  return $parts[-1]
-}
-
-function Center([string]$text, [int]$width = 90) {
-  if ([string]::IsNullOrEmpty($text)) { return "" }
-  if ($text.Length -ge $width) { return $text }
-  $pad = [math]::Floor(($width - $text.Length) / 2)
-  (" " * $pad) + $text
-}
 
 # Function to detect anomalies in cost data
 function Detect-CostAnomalies {
@@ -122,7 +127,7 @@ function Detect-CostAnomalies {
     # Check all resources in December data
     foreach ($k in $targetMap.Keys) {
         $targetCost = [double]$targetMap[$k]
-        $sourceCost = [double]($sourceMap[$k] ?? 0)
+        $sourceCost = if ($sourceMap.ContainsKey($k)) { [double]$sourceMap[$k] } else { 0 }
         $change = $targetCost - $sourceCost
         $percentChange = if ($sourceCost -ne 0) { [math]::Abs($change / $sourceCost) } else { [double]::PositiveInfinity }
         
@@ -259,114 +264,138 @@ function Append-AnomaliesToFile {
 }
 
 # ---- Process each subscription ----
+$azCmd = Get-Command -Name az -ErrorAction SilentlyContinue
+$costCmd = Get-Command -Name azure-cost -ErrorAction SilentlyContinue
+if (-not $azCmd -or -not $costCmd) {
+    $errorRecord = [System.Management.Automation.ErrorRecord]::new(
+        [System.Exception]::new('Required CLI(s) missing: az and/or azure-cost.'),
+        'MissingCliDependency',
+        [System.Management.Automation.ErrorCategory]::ResourceUnavailable,
+        $null
+    )
+    $PSCmdlet.ThrowTerminatingError($errorRecord)
+}
+
 $subs = az account list --query "[].[id,name]" -o tsv
+if ($LASTEXITCODE -ne 0 -or -not $subs) {
+    $errorRecord = [System.Management.Automation.ErrorRecord]::new(
+        [System.Exception]::new('Failed to list Azure subscriptions. Ensure Azure CLI is authenticated.'),
+        'SubscriptionListFailed',
+        [System.Management.Automation.ErrorCategory]::OpenError,
+        $null
+    )
+    $PSCmdlet.ThrowTerminatingError($errorRecord)
+}
 
 foreach ($line in $subs) {
-  $parts = $line.Trim() -split "`t"
-  if ($parts.Count -lt 2) { continue }
-  
-  $id = $parts[0].Trim()
-  $name = $parts[1].Trim()
-  
-  if (-not $id -or -not $name) { continue }
+    $parts = $line.Trim() -split "`t"
+    if ($parts.Count -lt 2) { continue }
+    
+    $id = $parts[0].Trim()
+    $name = $parts[1].Trim()
+    
+    if (-not $id -or -not $name) { continue }
 
-  Write-Host "`n=== Subscription: $name ($id) ==="
+    Write-Host "`n=== Subscription: $name ($id) ==="
 
-  $sourceFile = "$($SourceMonth)-resources-$name.json"
-  $targetFile = "$($TargetMonth)-resources-$name.json"
-  $outFile = "diff-resources-top50-$name.txt"
+    $safeName = $name -replace '[\\/:*?"<>|]', '_'
+    $sourceFile = "$SourceMonth-resources-$safeName.json"
+    $targetFile = "$TargetMonth-resources-$safeName.json"
+    $outFile = "diff-resources-top50-$safeName.txt"
 
-  # Export source month
-  azure-cost costByResource -s $id --timeframe Custom --from $fromSource --to $toSource -o json |
-    Out-File $sourceFile -Encoding utf8
-  if ($LASTEXITCODE -ne 0) { Write-Warning "Skipping $id (Nov export failed)"; continue }
-  if (-not (Test-Path $sourceFile) -or (Get-Item $sourceFile).Length -eq 0) { Write-Warning "Skipping $id (Nov empty)"; continue }
+    Write-Verbose "Processing subscription: $name ($id)"
 
-  # Export target month
-  azure-cost costByResource -s $id --timeframe Custom --from $fromTarget --to $toTarget -o json |
-    Out-File $targetFile -Encoding utf8
-  if ($LASTEXITCODE -ne 0) { Write-Warning "Skipping $id (Dec export failed)"; continue }
-  if (-not (Test-Path $targetFile) -or (Get-Item $targetFile).Length -eq 0) { Write-Warning "Skipping $id (Dec empty)"; continue }
-
-  # Load JSON
-  $sourceData = Get-Content $sourceFile -Raw | ConvertFrom-Json
-  $targetData = Get-Content $targetFile -Raw | ConvertFrom-Json
-
-  # Determine currency (assume consistent; fallback EUR)
-  $currency = ($targetData | Where-Object Currency | Select-Object -First 1 -ExpandProperty Currency)
-  if (-not $currency) { $currency = "EUR" }
-
-  # Build SUM maps (key -> total cost)
-  $sourceMap = @{}
-  foreach ($r in $sourceData) {
-    $k = ItemKey $r
-    $c = [double]$r.Cost
-    if ($sourceMap.ContainsKey($k)) { $sourceMap[$k] += $c } else { $sourceMap[$k] = $c }
-  }
-
-  $targetMap = @{}
-  foreach ($r in $targetData) {
-    $k = ItemKey $r
-    $c = [double]$r.Cost
-    if ($targetMap.ContainsKey($k)) { $targetMap[$k] += $c } else { $targetMap[$k] = $c }
-  }
-
-  # Build diff rows (one row per key): include new + increased (Change > 0)
-  $diff = foreach ($k in $targetMap.Keys) {
-    $targetCost = [double]$targetMap[$k]
-    $sourceCost = [double]($sourceMap[$k] ?? 0)
-    $change  = $targetCost - $sourceCost
-
-    if ($change -le 0) { continue }
-
-    # Grab one representative target row for display metadata
-    $rep = $targetData | Where-Object { (ItemKey $_) -eq $k } | Select-Object -First 1
-
-    [pscustomobject]@{
-      Name        = (ResourceDisplayName $rep)
-      Service     = $rep.ServiceName
-      Location    = $rep.ResourceLocation
-      ResourceGrp = $rep.ResourceGroupName
-      Source      = [math]::Round($sourceCost, 3)
-      Target      = [math]::Round($targetCost, 3)
-      Change      = [math]::Round($change, 3)
-      IsNew       = (-not $sourceMap.ContainsKey($k) -or $sourceCost -eq 0)
+    if ($PSCmdlet.ShouldProcess($sourceFile, "Export resource costs for $sourceMonthName ($name)")) {
+        azure-cost costByResource -s $id --timeframe Custom --from $fromSource --to $toSource -o json |
+            Out-File -FilePath $sourceFile -Encoding utf8
+        if ($LASTEXITCODE -ne 0) { Write-Warning "Skipping $id ($sourceMonthName export failed)"; continue }
+        if (-not (Test-Path -LiteralPath $sourceFile) -or (Get-Item -LiteralPath $sourceFile).Length -eq 0) { Write-Warning "Skipping $id ($sourceMonthName empty)"; continue }
     }
-  }
 
-  # Top 50 by increase
-  $top50 = $diff | Sort-Object Change -Descending | Select-Object -First 50
+    if ($PSCmdlet.ShouldProcess($targetFile, "Export resource costs for $targetMonthName ($name)")) {
+        azure-cost costByResource -s $id --timeframe Custom --from $fromTarget --to $toTarget -o json |
+            Out-File -FilePath $targetFile -Encoding utf8
+        if ($LASTEXITCODE -ne 0) { Write-Warning "Skipping $id ($targetMonthName export failed)"; continue }
+        if (-not (Test-Path -LiteralPath $targetFile) -or (Get-Item -LiteralPath $targetFile).Length -eq 0) { Write-Warning "Skipping $id ($targetMonthName empty)"; continue }
+    }
 
-  # Write header
-  @(
-    Center "Azure Cost Diff (Resource Level)"
-    Center $sourceLabel
-    Center $targetLabel
-    ""
-  ) | Out-File $outFile -Encoding utf8
+    $sourceData = Get-Content -LiteralPath $sourceFile -Raw | ConvertFrom-Json
+    $targetData = Get-Content -LiteralPath $targetFile -Raw | ConvertFrom-Json
 
-  # Write table (append)
-  $top50 |
-    Select-Object `
-      Service,
-      ResourceGrp,
-      Location,
-      @{n="Source";e={ "{0:N2} {1}" -f $_.Source, $currency }},
-      @{n="Target";e={ "{0:N2} {1}" -f $_.Target, $currency }},
-      @{n="Change";e={ "{0}{1:N2} {2}" -f ($(if ($_.Change -ge 0){"+"}else{""})), $_.Change, $currency }},
-      @{n="New?";e={ if ($_.IsNew) { "YES" } else { "" } }},
-      @{n="Name";e={ if ($_.Name.Length -gt 140) { $_.Name.Substring(0,140) + "…" } else { $_.Name } }} |
-    Format-Table -AutoSize -Wrap |
-    Out-String -Width 500 |
-    Out-File $outFile -Encoding utf8 -Append
+    # Determine currency (assume consistent; fallback EUR)
+    $currency = ($targetData | Where-Object Currency | Select-Object -First 1 -ExpandProperty Currency)
+    if (-not $currency) { $currency = "EUR" }
 
-    # ---- Append Summary (for all included items, not just top50) ----
-    $srcTotal = ($diff | Measure-Object Source -Sum).Sum
-    $tgtTotal = ($diff | Measure-Object Target -Sum).Sum
-    $chgTotal = ($diff | Measure-Object Change   -Sum).Sum
-"" | Out-File $outFile -Encoding utf8 -Append
-"Summary" | Out-File $outFile -Encoding utf8 -Append
-"-------" | Out-File $outFile -Encoding utf8 -Append
+    # Build SUM maps (key -> total cost)
+    $sourceMap = @{}
+    foreach ($r in $sourceData) {
+        $k = ItemKey $r
+        $c = [double]$r.Cost
+        if ($sourceMap.ContainsKey($k)) { $sourceMap[$k] += $c } else { $sourceMap[$k] = $c }
+    }
+
+    $targetMap = @{}
+    foreach ($r in $targetData) {
+        $k = ItemKey $r
+        $c = [double]$r.Cost
+        if ($targetMap.ContainsKey($k)) { $targetMap[$k] += $c } else { $targetMap[$k] = $c }
+    }
+
+    $diff = foreach ($k in $targetMap.Keys) {
+        $targetCost = [double]$targetMap[$k]
+        $sourceCost = if ($sourceMap.ContainsKey($k)) { [double]$sourceMap[$k] } else { 0 }
+        $change  = $targetCost - $sourceCost
+
+        if ($change -le 0) { continue }
+
+        # Grab one representative target row for display metadata
+        $rep = $targetData | Where-Object { (ItemKey $_) -eq $k } | Select-Object -First 1
+
+        [pscustomobject]@{
+            Name        = (ResourceDisplayName $rep)
+            Service     = $rep.ServiceName
+            Location    = $rep.ResourceLocation
+            ResourceGrp = $rep.ResourceGroupName
+            Source      = [math]::Round($sourceCost, 3)
+            Target      = [math]::Round($targetCost, 3)
+            Change      = [math]::Round($change, 3)
+            IsNew       = (-not $sourceMap.ContainsKey($k) -or $sourceCost -eq 0)
+        }
+    }
+
+    # Top 50 by increase
+    $top50 = $diff | Sort-Object Change -Descending | Select-Object -First 50
+
+    # Write header
+    @(
+        Center "Azure Cost Diff (Resource Level)"
+        Center $sourceLabel
+        Center $targetLabel
+        ""
+    ) | Out-File -FilePath $outFile -Encoding utf8
+
+    # Write table (append)
+    $top50 |
+        Select-Object `
+          Service,
+          ResourceGrp,
+          Location,
+          @{n="Source";e={ "{0:N2} {1}" -f $_.Source, $currency }},
+          @{n="Target";e={ "{0:N2} {1}" -f $_.Target, $currency }},
+          @{n="Change";e={ "{0}{1:N2} {2}" -f ($(if ($_.Change -ge 0){"+"}else{""})), $_.Change, $currency }},
+          @{n="New?";e={ if ($_.IsNew) { "YES" } else { "" } }},
+          @{n="Name";e={ if ($_.Name.Length -gt 140) { $_.Name.Substring(0,140) + "…" } else { $_.Name } }} |
+        Format-Table -AutoSize -Wrap |
+        Out-String -Width 500 |
+        Out-File -FilePath $outFile -Encoding utf8 -Append
+
+        # ---- Append Summary (for all included items, not just top50) ----
+        $srcTotal = ($diff | Measure-Object Source -Sum).Sum
+        $tgtTotal = ($diff | Measure-Object Target -Sum).Sum
+        $chgTotal = ($diff | Measure-Object Change   -Sum).Sum
+"" | Out-File -FilePath $outFile -Encoding utf8 -Append
+"Summary" | Out-File -FilePath $outFile -Encoding utf8 -Append
+"-------" | Out-File -FilePath $outFile -Encoding utf8 -Append
 
 @(
   [pscustomobject]@{
@@ -378,9 +407,9 @@ foreach ($line in $subs) {
 ) |
   Format-Table -AutoSize |
   Out-String -Width 200 |
-  Out-File $outFile -Encoding utf8 -Append
+  Out-File -FilePath $outFile -Encoding utf8 -Append
 
-Write-Host "Saved: $outFile"
+Write-Information "Saved: $outFile"
 
 # Detect and append anomalies to file
 $anomalies = Detect-CostAnomalies -SourceData $sourceData -TargetData $targetData `
@@ -389,5 +418,5 @@ $anomalies = Detect-CostAnomalies -SourceData $sourceData -TargetData $targetDat
 Append-AnomaliesToFile -Anomalies $anomalies -Currency $currency -OutFile $outFile `
   -SourceMonthName $sourceMonthName -TargetMonthName $targetMonthName
 
-Write-Host "Anomalies appended to: $outFile"
+Write-Information "Anomalies appended to: $outFile"
 }
