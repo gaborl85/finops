@@ -1,5 +1,28 @@
-# Azure Cost Diff - ANSI Stripped Version (Parameterized)
-# This script compares accumulated costs between any two months
+<#
+.SYNOPSIS
+    Compares accumulated costs between any two months across Azure subscriptions.
+
+.DESCRIPTION
+    This script retrieves accumulated cost data from Azure Cost Management for two months
+    and generates a clean diff report. It processes all subscriptions automatically and
+    strips ANSI escape codes for plain text output.
+
+.PARAMETER SourceMonth
+    Source month in YYYY-MM format (e.g., "2025-11"). Required.
+
+.PARAMETER TargetMonth
+    Target month in YYYY-MM format (e.g., "2025-12"). Required.
+
+.EXAMPLE
+    .\accumulatedCost.ps1 -SourceMonth "2025-11" -TargetMonth "2025-12"
+
+.EXAMPLE
+    .\accumulatedCost.ps1 -SourceMonth "2025-09" -TargetMonth "2025-10"
+
+.NOTES
+    Version: 2.0.0
+    Requires: Azure CLI, Azure Cost CLI, PowerShell 5.1+
+#>
 
 param(
     [Parameter(Mandatory=$true)]

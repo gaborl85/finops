@@ -1,9 +1,38 @@
-# ------------------------------------------------------------
-# Azure costByResource monthly diff per subscription with anomaly detection
-# Parameterized version - compares any two months
-# Handles empty ResourceId rows (refunds/purchases/reservations) via composite key
-# Produces: a .txt report per subscription with a 3-line header + formatted table
-# ------------------------------------------------------------
+<#
+.SYNOPSIS
+    Analyzes resource-level costs with anomaly detection across Azure subscriptions.
+
+.DESCRIPTION
+    This script compares resource-level costs between two months, identifies anomalies
+    (new costs, removed costs, significant changes), and generates detailed reports
+    with the top 50 cost increases. Handles resources without ResourceId (refunds, 
+    reservations, purchases) using composite keys.
+
+.PARAMETER SourceMonth
+    Source month in YYYY-MM format (e.g., "2025-11"). Required.
+
+.PARAMETER TargetMonth
+    Target month in YYYY-MM format (e.g., "2025-12"). Required.
+
+.PARAMETER SignificantChangeThreshold
+    Percentage threshold for significant changes (default: 0.5 = 50%). Optional.
+
+.PARAMETER MinimumCostThreshold
+    Minimum cost in currency units to consider for anomaly detection (default: 1.0). Optional.
+
+.EXAMPLE
+    .\diff_costByResource.ps1 -SourceMonth "2025-11" -TargetMonth "2025-12"
+
+.EXAMPLE
+    # More sensitive detection (30% threshold, 5 EUR minimum)
+    .\diff_costByResource.ps1 -SourceMonth "2025-11" -TargetMonth "2025-12" `
+        -SignificantChangeThreshold 0.3 `
+        -MinimumCostThreshold 5.0
+
+.NOTES
+    Version: 2.0.0
+    Requires: Azure CLI, Azure Cost CLI, PowerShell 5.1+
+#>
 
 param(
     [Parameter(Mandatory=$true)]

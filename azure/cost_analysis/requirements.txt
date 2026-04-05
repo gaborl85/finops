@@ -1,23 +1,46 @@
-# Azure FinOps Cost Aggregator - Python Dependencies
-#
-# This project uses only Python standard library modules.
-# No external dependencies are required.
-#
-# Standard library modules used:
-# - os: File system operations
-# - json: JSON parsing
-# - re: Regular expression matching
-# - pathlib: Path manipulation
-# - collections: defaultdict for data structures
-# - typing: Type hints
-# - datetime: Timestamp generation
-#
-# Python version requirement: 3.7+
-#
-# To verify your Python version:
-#   python3 --version
-#
-# If you need to create a virtual environment (optional):
-#   python3 -m venv venv
-#   source venv/bin/activate  # On Linux/Mac
-#   venv\Scripts\activate     # On Windows
+# Azure Cost Analysis Module - Requirements
+# This module uses PowerShell scripts with Azure CLI and Azure Cost CLI.
+# No Python dependencies required.
+
+## Required Tools
+
+### 1. Azure CLI (az)
+- Installation: https://docs.microsoft.com/cli/azure/install-azure-cli
+- Required for: Authentication and subscription management
+- Verify: `az --version`
+
+### 2. Azure Cost CLI
+- Installation: `dotnet tool install -g azure-cost-cli`
+- Source: https://github.com/mivano/azure-cost-cli
+- Required for: Querying cost data from Azure Cost Management
+- Verify: `azure-cost --version`
+
+### 3. PowerShell
+- Minimum: PowerShell 5.1
+- Recommended: PowerShell 7+ (cross-platform)
+- Windows: Built into Windows 10/11
+- macOS/Linux: https://github.com/PowerShell/PowerShell/releases
+
+## Permissions Required
+
+- Azure Cost Management Reader role on subscriptions
+- Azure Reader role for subscription access
+
+## Verification Commands
+
+```powershell
+# Check Azure CLI
+az --version
+
+# Check Azure Cost CLI
+azure-cost --version
+
+# Check PowerShell version
+$PSVersionTable.PSVersion
+
+# Verify authentication
+az account list --output table
+
+# Verify cost access
+az costmanagement query --help
+```
