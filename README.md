@@ -41,6 +41,17 @@ Tools for analyzing Azure costs with parameterized comparisons and anomaly detec
 
 ## 🚀 Getting Started
 
+### Kilo Integration
+
+This project can be used with Kilo, an AI-powered coding assistant. The project includes a Kilo configuration file:
+
+**Location:** [`.kilo/kilo.jsonc`](.kilo/kilo.jsonc)
+
+The configuration defines:
+- Project metadata (name, version, description)
+- Dependencies and devDependencies
+- Agent instructions for documentation updates
+
 ### Prerequisites
 
 - PowerShell 5.1 or higher (PowerShell Core 7+ recommended)

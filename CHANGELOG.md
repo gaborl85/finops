@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Kilo configuration file (`.kilo/kilo.jsonc`) for AI assistant integration
+- Kilo documentation update instructions (`.kilo/instructions/update-docs-on-code-change.md`)
+
 ### Planned
 - AWS cost analysis module
 - GCP cost analysis module

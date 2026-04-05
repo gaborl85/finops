@@ -1,0 +1,51 @@
+// FinOps Toolkit - Kilo project configuration
+{
+  "name": "finops",
+  "version": "2.0.0",
+  "description": "A comprehensive portfolio of scripts and tools for Financial Operations (FinOps) across cloud platforms",
+  "author": "FinOps Community Contributors",
+  "license": "MIT",
+  "type": "script",
+
+  // Instructions - files containing agent guidelines
+  "instructions": [
+    "./instructions/update-docs-on-code-change.md"
+  ],
+
+  // Repository
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gaborl/finops"
+  },
+
+  // Language
+  "language": "powershell",
+
+  // Dependencies
+  "dependencies": {
+    "azure-cost-cli": "latest"
+  },
+
+  // Scripts (PowerShell)
+  "scripts": {
+    "cost:accumulated": "pwsh -File ./azure/cost_analysis/diff_accumulated/accumulatedCost.ps1",
+    "cost:resource": "pwsh -File ./azure/cost_analysis/diff_resource/diff_costByResource.ps1"
+  },
+
+  // Modules
+  "modules": [
+    {
+      "name": "azure-cost-analysis",
+      "path": "azure/cost_analysis",
+      "description": "Azure cost analysis with parameterized comparisons and anomaly detection"
+    }
+  ],
+
+  // Files to include
+  "files": [
+    "azure/",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ]
+}
